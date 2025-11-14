@@ -4,6 +4,7 @@ export const envSchema = z.object({
   PORT: z.coerce.number().default(3000),
   OLLAMA_HOST: z.string(),
   OLLAMA_MODEL: z.string(),
+  OLLAMA_EMBEDDING_MODEL: z.string(),
 });
 
 export type Env = z.infer<typeof envSchema>;
