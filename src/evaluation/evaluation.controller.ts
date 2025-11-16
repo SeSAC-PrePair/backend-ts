@@ -1,12 +1,13 @@
-import { Controller, Get } from "@nestjs/common";
+import { Body, Controller, Post } from "@nestjs/common";
+import type { FeedbackRequestDto } from "@/evaluation/dto/feedback-request.dto";
 import { EvaluationService } from "@/evaluation/evaluation.service";
 
 @Controller("api/evaluation")
 export class EvaluationController {
   constructor(private readonly evaluationService: EvaluationService) {}
 
-  @Get()
-  async ollamaResponseTest() {
-    return this.evaluationService.ollamaResponseTest();
+  @Post("feedback")
+  async feedback(@Body() feedbackRequestDto: FeedbackRequestDto) {
+    return await this.evaluationService.feedback(feedbackRequestDto);
   }
 }
