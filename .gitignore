@@ -366,3 +366,5 @@ dist
 # https://plugins.jetbrains.com/plugin/8053-azure-toolkit-for-intellij
 
 # End of https://www.toptal.com/developers/gitignore/api/jetbrains,webstorm,macos,node
+
+/generated/prisma
