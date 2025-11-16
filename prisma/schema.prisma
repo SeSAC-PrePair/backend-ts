@@ -1,0 +1,48 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model history {
+  question_id BigInt           @id @default(autoincrement())
+  user_id     BigInt
+  question    String
+  created_at  DateTime?        @default(now()) @db.Timestamptz(6)
+  answer      String?
+  feedback    String?
+  score       Int?
+  status      question_status? @default(UNANSWERED)
+  user        user             @relation(fields: [user_id], references: [user_id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+model user {
+  user_id           BigInt            @id @default(autoincrement())
+  email             String            @unique @db.VarChar(255)
+  name              String            @db.VarChar(100)
+  password          String            @db.VarChar(255)
+  job               String            @db.VarChar(100)
+  schedule          schedule_type
+  notification_type notification_type @default(EMAIL)
+  points            Int?              @default(0)
+  history           history[]
+}
+
+enum notification_type {
+  EMAIL
+  KAKAO
+}
+
+enum question_status {
+  ANSWERED
+  UNANSWERED
+}
+
+enum schedule_type {
+  DAILY
+  WEEKLY
+}
