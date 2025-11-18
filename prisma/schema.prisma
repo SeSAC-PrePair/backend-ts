@@ -1,6 +1,5 @@
 generator client {
-  provider = "prisma-client"
-  output   = "../generated/prisma"
+  provider = "prisma-client-js"
 }
 
 datasource db {
@@ -9,8 +8,8 @@ datasource db {
 }
 
 model history {
-  question_id BigInt           @id @default(autoincrement())
-  user_id     BigInt
+  question_id Int              @id @default(autoincrement())
+  user_id     Int
   question    String
   created_at  DateTime?        @default(now()) @db.Timestamptz(6)
   answer      String?
@@ -21,7 +20,7 @@ model history {
 }
 
 model user {
-  user_id           BigInt            @id @default(autoincrement())
+  user_id           Int               @id @default(autoincrement())
   email             String            @unique @db.VarChar(255)
   name              String            @db.VarChar(100)
   password          String            @db.VarChar(255)
