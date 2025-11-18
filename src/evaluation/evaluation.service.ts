@@ -1,9 +1,10 @@
-import { Injectable } from "@nestjs/common";
+import { BadRequestException, HttpStatus, Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { Ollama } from "ollama";
 import { Env } from "@/config/env.config";
 import { FeedbackRequestDto } from "@/evaluation/dto/feedback-request.dto";
 import { KOREAN_STOP_WORDS } from "@/shared/constants/korean-stop-words";
+import { PrismaService } from "@/shared/prisma/prisma.service";
 
 export interface AiFeedback {
   good: string;
@@ -16,6 +17,7 @@ export class EvaluationService {
   constructor(
     private readonly ollama: Ollama,
     private readonly configService: ConfigService<Env, true>,
+    private readonly prismaService: PrismaService,
   ) {}
 
   async feedback(feedbackRequestDto: FeedbackRequestDto) {
@@ -634,5 +636,27 @@ export class EvaluationService {
           "해당 주제에 대한 공식 문서 학습, 실무 적용 사례 분석, 기술 블로그 및 아티클 읽기, 관련 프로젝트 실습 경험 쌓기, 면접 시뮬레이션을 통한 답변 구조화 연습",
       };
     }
+  }
+
+  async feedbackRegeneration(result: any, questionId: number) {
+    const existQuestion = await this.prismaService.history.findFirst({
+      where: { question_id: questionId },
+    });
+
+    if (!existQuestion) {
+      throw new BadRequestException("면접 질문이 없습니다. 다시 확인해주세요.");
+    }
+
+    await this.prismaService.history.update({
+      where: { question_id: questionId },
+      data: {
+        feedback: JSON.stringify(result.feedback),
+        created_at: new Date(Date.now() + 9 * 60 * 60 * 1000),
+      },
+    });
+
+    return await this.prismaService.history.findFirst({
+      where: { question_id: questionId },
+    });
   }
 }

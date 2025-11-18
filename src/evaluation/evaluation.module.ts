@@ -2,10 +2,12 @@ import { Module } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { Ollama } from "ollama";
 import { Env } from "@/config/env.config";
+import { PrismaModule } from "@/shared/prisma/prisma.module";
 import { EvaluationController } from "./evaluation.controller";
 import { EvaluationService } from "./evaluation.service";
 
 @Module({
+  imports: [PrismaModule],
   providers: [
     {
       provide: Ollama,
