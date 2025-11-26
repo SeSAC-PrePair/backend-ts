@@ -15,6 +15,7 @@ model history {
   answer      String?
   feedback    String?
   score       Int?
+  total_score Int?
   status      question_status? @default(UNANSWERED)
   user        user             @relation(fields: [user_id], references: [user_id], onDelete: Cascade, onUpdate: NoAction)
 }
@@ -29,6 +30,25 @@ model user {
   notification_type notification_type @default(EMAIL)
   points            Int?              @default(0)
   history           history[]
+}
+
+model sensor {
+  sensor_id    Int           @id @default(autoincrement())
+  sensor_name  String        @db.VarChar(100)
+  location     String?
+  installed_at DateTime?     @default(now()) @db.Timestamptz(6)
+  sensor_data  sensor_data[]
+}
+
+model sensor_data {
+  data_id     Int      @id @default(autoincrement())
+  sensor_id   Int
+  recorded_at DateTime @default(now()) @db.Timestamptz(6)
+  temperature Float?
+  humidity    Float?
+  light       Float?
+  co2         Float?
+  sensor      sensor   @relation(fields: [sensor_id], references: [sensor_id], onDelete: Cascade, onUpdate: NoAction)
 }
 
 enum notification_type {

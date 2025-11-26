@@ -1,5 +1,6 @@
-import { BadRequestException, HttpStatus, Injectable } from "@nestjs/common";
+import { BadRequestException, Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
+import { question_status } from "@prisma/client";
 import { Ollama } from "ollama";
 import { Env } from "@/config/env.config";
 import { FeedbackRequestDto } from "@/evaluation/dto/feedback-request.dto";
@@ -20,8 +21,23 @@ export class EvaluationService {
     private readonly prismaService: PrismaService,
   ) {}
 
-  async feedback(feedbackRequestDto: FeedbackRequestDto) {
-    const { question, answer } = feedbackRequestDto;
+  async feedback(
+    feedbackRequestDto: FeedbackRequestDto,
+    options: { incrementTotalScore?: boolean } = { incrementTotalScore: true },
+  ) {
+    const { questionId, question, answer } = feedbackRequestDto;
+
+    const existQuestion = await this.prismaService.history.findFirst({
+      where: {
+        question_id: questionId,
+      },
+    });
+
+    if (!existQuestion) {
+      throw new BadRequestException(
+        "질문에 대한 답변이 없습니다. 다시 확인해주세요.",
+      );
+    }
 
     const issues: string[] = [];
 
@@ -146,17 +162,50 @@ export class EvaluationService {
       issues.push("질문의 핵심 요구사항을 충족하지 못했습니다");
     }
 
-    return {
-      score: finalScore,
-      breakdown: {
-        semanticSimilarity: semanticScore,
-        relevanceScore,
-        qualityScore,
-        penaltyScore: penalty,
+    const feedback = await this.generateFeedback(question, answer);
+
+    // 추가 로직 필요함 DB 내용 수정해야 함.
+    await this.prismaService.history.update({
+      where: { question_id: questionId },
+      data: {
+        question: question,
+        answer: answer,
+        feedback: JSON.stringify(feedback),
+        created_at: new Date(Date.now() + 9 * 60 * 60 * 1000),
+        score: finalScore,
+        ...(options.incrementTotalScore && {
+          total_score: {
+            increment: finalScore,
+          },
+        }),
+        status: question_status.ANSWERED,
       },
-      feedback: await this.generateFeedback(question, answer),
-      detectedIssues: issues,
+    });
+
+    const history = await this.prismaService.history.findFirst({
+      where: { question_id: questionId },
+    });
+
+    if (!history) {
+      throw new Error("History not found");
+    }
+
+    return {
+      ...history,
+      feedback: history.feedback ? JSON.parse(history.feedback) : null,
     };
+
+    // return {
+    //   score: finalScore,
+    //   breakdown: {
+    //     semanticSimilarity: semanticScore,
+    //     relevanceScore,
+    //     qualityScore,
+    //     penaltyScore: penalty,
+    //   },
+    //   feedback: await this.generateFeedback(question, answer),
+    //   detectedIssues: issues,
+    // };
   }
 
   private async generateEmbedding(text: string): Promise<number[]> {
@@ -592,7 +641,7 @@ export class EvaluationService {
 {
   "good": "하나의 긴 문자열로 작성. 답변에서 잘한 점을 5~7문장으로 매우 상세하게 작성하세요. 면접 질문과의 연관성, 기술적 정확성, 구조적인 장점, 표현력, 전문성 등을 구체적인 예시와 함께 깊이 있게 평가하세요. 단순한 칭찬이 아니라 왜 그것이 좋은지 근거를 들어 설명하세요.",
   "improvement": "하나의 긴 문자열로 작성. 개선이 필요한 점을 5~7문장으로 매우 상세하게 작성하세요. 부족한 기술적 설명, 논리적 비약, 실무 관점의 미흡함, 깊이 부족 등을 구체적인 예시와 함께 지적하세요. 각 개선점마다 왜 개선이 필요한지, 어떻게 개선할 수 있는지를 함께 제시하세요.",
-  "recommendation": "하나의 긴 문자열로 작성. 추가 학습이 필요한 주제를 5~7개 쉼표로 구분하여 나열하세요. 단순 키워드가 아니라 면접 향상에 직접 도움이 되는 구체적인 주제명과 학습 방향을 포함하세요. 예시: REST API 설계 원칙과 Best Practices, Docker 컨테이너 오케스트레이션 기초, 데이터베이스 인덱싱 전략, 시스템 아키텍처 설계 패턴"
+  "recommendation": "추가 학습이 필요한 주제 5~7개를 쉼표로 구분하여 나열만 하세요. 서두 없이 주제명만 작성하세요. 예시: REST API 설계 원칙과 Best Practices, Docker 컨테이너 오케스트레이션 기초, 데이터베이스 인덱싱 전략, 시스템 아키텍처 설계 패턴"
 }
 
 피드백 작성 기준:
@@ -639,24 +688,29 @@ export class EvaluationService {
   }
 
   async feedbackRegeneration(result: any, questionId: number) {
-    const existQuestion = await this.prismaService.history.findFirst({
-      where: { question_id: questionId },
-    });
-
-    if (!existQuestion) {
-      throw new BadRequestException("면접 질문이 없습니다. 다시 확인해주세요.");
-    }
-
     await this.prismaService.history.update({
       where: { question_id: questionId },
       data: {
+        question: result.question,
+        answer: result.answer,
         feedback: JSON.stringify(result.feedback),
         created_at: new Date(Date.now() + 9 * 60 * 60 * 1000),
+        score: result.score,
+        status: question_status.ANSWERED,
       },
     });
 
-    return await this.prismaService.history.findFirst({
+    const history = await this.prismaService.history.findFirst({
       where: { question_id: questionId },
     });
+
+    if (!history) {
+      throw new Error("History not found");
+    }
+
+    return {
+      ...history,
+      feedback: history.feedback ? JSON.parse(history.feedback) : null,
+    };
   }
 }
