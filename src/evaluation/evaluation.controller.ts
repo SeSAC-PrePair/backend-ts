@@ -6,19 +6,13 @@ import { EvaluationService } from "@/evaluation/evaluation.service";
 export class EvaluationController {
   constructor(private readonly evaluationService: EvaluationService) {}
 
-  @Post("feedback")
+  @Patch("feedback")
   async feedback(@Body() feedbackRequestDto: FeedbackRequestDto) {
-    return await this.evaluationService.feedback(feedbackRequestDto);
+    return await this.evaluationService.updateFeedback(feedbackRequestDto);
   }
 
-  @Patch("feedback")
+  @Post("feedback")
   async feedbackRegeneration(@Body() feedbackRequestDto: FeedbackRequestDto) {
-    const result = await this.evaluationService.feedback(feedbackRequestDto, {
-      incrementTotalScore: false,
-    });
-    return this.evaluationService.feedbackRegeneration(
-      result,
-      feedbackRequestDto.questionId,
-    );
+    return await this.evaluationService.createFeedback(feedbackRequestDto);
   }
 }
