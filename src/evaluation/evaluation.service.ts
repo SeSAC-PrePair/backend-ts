@@ -167,8 +167,11 @@ export class EvaluationService {
     };
   }
 
-  async updateFeedback(feedbackRequestDto: FeedbackRequestDto) {
-    const { questionId, question, answer } = feedbackRequestDto;
+  async updateFeedback(
+    feedbackRequestDto: FeedbackRequestDto,
+    questionId: number,
+  ) {
+    const { question, answer } = feedbackRequestDto;
 
     const existQuestion = await this.prismaService.history.findFirst({
       where: { question_id: questionId },
@@ -209,8 +212,11 @@ export class EvaluationService {
     };
   }
 
-  async createFeedback(feedbackRequestDto: FeedbackRequestDto) {
-    const { questionId, question, answer } = feedbackRequestDto;
+  async createFeedback(
+    feedbackRequestDto: FeedbackRequestDto,
+    questionId: number,
+  ) {
+    const { question, answer } = feedbackRequestDto;
 
     const existHistory = await this.prismaService.history.findFirst({
       where: { question_id: questionId },
