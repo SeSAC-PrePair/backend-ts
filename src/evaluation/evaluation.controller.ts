@@ -1,4 +1,11 @@
-import { Body, Controller, Patch, Post } from "@nestjs/common";
+import {
+  Body,
+  Controller,
+  Param,
+  ParseIntPipe,
+  Patch,
+  Post,
+} from "@nestjs/common";
 import type { FeedbackRequestDto } from "@/evaluation/dto/feedback-request.dto";
 import { EvaluationService } from "@/evaluation/evaluation.service";
 
@@ -6,13 +13,25 @@ import { EvaluationService } from "@/evaluation/evaluation.service";
 export class EvaluationController {
   constructor(private readonly evaluationService: EvaluationService) {}
 
-  @Patch("feedback")
-  async feedback(@Body() feedbackRequestDto: FeedbackRequestDto) {
-    return await this.evaluationService.updateFeedback(feedbackRequestDto);
+  @Patch("feedback/:questionId")
+  async feedback(
+    @Body() feedbackRequestDto: FeedbackRequestDto,
+    @Param("questionId", new ParseIntPipe()) questionId: number,
+  ) {
+    return await this.evaluationService.updateFeedback(
+      feedbackRequestDto,
+      questionId,
+    );
   }
 
-  @Post("feedback")
-  async feedbackRegeneration(@Body() feedbackRequestDto: FeedbackRequestDto) {
-    return await this.evaluationService.createFeedback(feedbackRequestDto);
+  @Post("feedback/:questionId")
+  async feedbackRegeneration(
+    @Body() feedbackRequestDto: FeedbackRequestDto,
+    @Param("questionId", new ParseIntPipe()) questionId: number,
+  ) {
+    return await this.evaluationService.createFeedback(
+      feedbackRequestDto,
+      questionId,
+    );
   }
 }
