@@ -13,6 +13,12 @@ export interface AiFeedback {
   recommendation: string;
 }
 
+export interface FeedbackResult {
+  score: number;
+  feedback: AiFeedback | string;
+  detectedIssues?: string[];
+}
+
 @Injectable()
 export class EvaluationService {
   constructor(
@@ -21,23 +27,13 @@ export class EvaluationService {
     private readonly prismaService: PrismaService,
   ) {}
 
-  async feedback(
+  /**
+   * 점수와 피드백을 계산만 수행 (DB 저장 없음)
+   */
+  async calculateFeedback(
     feedbackRequestDto: FeedbackRequestDto,
-    options: { incrementTotalScore?: boolean } = { incrementTotalScore: true },
-  ) {
-    const { questionId, question, answer } = feedbackRequestDto;
-
-    const existQuestion = await this.prismaService.history.findFirst({
-      where: {
-        question_id: questionId,
-      },
-    });
-
-    if (!existQuestion) {
-      throw new BadRequestException(
-        "질문에 대한 답변이 없습니다. 다시 확인해주세요.",
-      );
-    }
+  ): Promise<FeedbackResult> {
+    const { question, answer } = feedbackRequestDto;
 
     const issues: string[] = [];
 
@@ -164,20 +160,37 @@ export class EvaluationService {
 
     const feedback = await this.generateFeedback(question, answer);
 
-    // 추가 로직 필요함 DB 내용 수정해야 함.
+    return {
+      score: finalScore,
+      feedback,
+      detectedIssues: issues.length > 0 ? issues : undefined,
+    };
+  }
+
+  async updateFeedback(feedbackRequestDto: FeedbackRequestDto) {
+    const { questionId, question, answer } = feedbackRequestDto;
+
+    const existQuestion = await this.prismaService.history.findFirst({
+      where: { question_id: questionId },
+    });
+
+    if (!existQuestion) {
+      throw new BadRequestException("질문이 없습니다. 다시 확인해주세요.");
+    }
+
+    const result = await this.calculateFeedback(feedbackRequestDto);
+
     await this.prismaService.history.update({
       where: { question_id: questionId },
       data: {
-        question: question,
-        answer: answer,
-        feedback: JSON.stringify(feedback),
+        question,
+        answer,
+        feedback: JSON.stringify(result.feedback),
         created_at: new Date(Date.now() + 9 * 60 * 60 * 1000),
-        score: finalScore,
-        ...(options.incrementTotalScore && {
-          total_score: {
-            increment: finalScore,
-          },
-        }),
+        score: result.score,
+        total_score: {
+          increment: result.score,
+        },
         status: question_status.ANSWERED,
       },
     });
@@ -194,18 +207,40 @@ export class EvaluationService {
       ...history,
       feedback: history.feedback ? JSON.parse(history.feedback) : null,
     };
+  }
 
-    // return {
-    //   score: finalScore,
-    //   breakdown: {
-    //     semanticSimilarity: semanticScore,
-    //     relevanceScore,
-    //     qualityScore,
-    //     penaltyScore: penalty,
-    //   },
-    //   feedback: await this.generateFeedback(question, answer),
-    //   detectedIssues: issues,
-    // };
+  async createFeedback(feedbackRequestDto: FeedbackRequestDto) {
+    const { questionId, question, answer } = feedbackRequestDto;
+
+    const existHistory = await this.prismaService.history.findFirst({
+      where: { question_id: questionId },
+      select: { user_id: true },
+    });
+
+    if (!existHistory) {
+      throw new BadRequestException(
+        "질문에 대한 답변이 없습니다. 다시 확인해주세요.",
+      );
+    }
+
+    const result = await this.calculateFeedback(feedbackRequestDto);
+
+    const newHistory = await this.prismaService.history.create({
+      data: {
+        user_id: existHistory.user_id,
+        question,
+        answer,
+        feedback: JSON.stringify(result.feedback),
+        created_at: new Date(Date.now() + 9 * 60 * 60 * 1000),
+        score: result.score,
+        status: question_status.ANSWERED,
+      },
+    });
+
+    return {
+      ...newHistory,
+      feedback: newHistory.feedback ? JSON.parse(newHistory.feedback) : null,
+    };
   }
 
   private async generateEmbedding(text: string): Promise<number[]> {
@@ -629,7 +664,10 @@ export class EvaluationService {
   private async generateFeedback(
     question: string,
     answer: string,
+    retryCount = 0,
   ): Promise<AiFeedback> {
+    const MAX_RETRIES = 2;
+
     try {
       const prompt = `당신은 경력 10년 이상의 시니어 면접관입니다. 다음 면접 질문과 지원자의 답변을 깊이 있게 분석하여 상세한 피드백을 제공하세요.
 
@@ -637,7 +675,10 @@ export class EvaluationService {
 
 지원자 답변: ${answer}
 
-다음 형식의 JSON으로만 응답하세요. 각 필드는 하나의 긴 문자열로 작성하세요:
+[필수] 아래 JSON 형식으로만 응답하세요. JSON 외의 텍스트는 절대 포함하지 마세요.
+[필수] 각 필드는 하나의 긴 문자열로 작성하세요.
+[필수] 한국어로 작성하세요.
+
 {
   "good": "하나의 긴 문자열로 작성. 답변에서 잘한 점을 5~7문장으로 매우 상세하게 작성하세요. 면접 질문과의 연관성, 기술적 정확성, 구조적인 장점, 표현력, 전문성 등을 구체적인 예시와 함께 깊이 있게 평가하세요. 단순한 칭찬이 아니라 왜 그것이 좋은지 근거를 들어 설명하세요.",
   "improvement": "하나의 긴 문자열로 작성. 개선이 필요한 점을 5~7문장으로 매우 상세하게 작성하세요. 부족한 기술적 설명, 논리적 비약, 실무 관점의 미흡함, 깊이 부족 등을 구체적인 예시와 함께 지적하세요. 각 개선점마다 왜 개선이 필요한지, 어떻게 개선할 수 있는지를 함께 제시하세요.",
@@ -651,30 +692,39 @@ export class EvaluationService {
 - 실무 관점과 경험이 반영되어 있는가?
 - 구체적인 예시나 사례를 들어 설명했는가?
 
-중요: 각 필드는 배열이나 객체가 아닌 하나의 긴 문자열로만 작성하세요. 반드시 JSON 형식으로만 응답하고, 다른 설명은 포함하지 마세요.`;
+중요: 반드시 위의 JSON 형식으로만 응답하세요. 인사말, 설명, 마크다운 코드블록 없이 순수 JSON만 출력하세요.`;
 
       const response = await this.ollama.generate({
         model: `${this.configService.get("OLLAMA_MODEL", { infer: true })}`,
         prompt,
         stream: false,
-        format: "json", // JSON 형식 응답 강제
+        format: "json",
         options: {
-          temperature: 0.7, // 창의적이면서도 일관된 피드백
-          num_predict: 2000, // 상세한 피드백을 위한 충분한 토큰 수 (각 필드 5-7문장)
+          temperature: 0.7,
+          num_predict: 2000,
         },
       });
 
-      // JSON 파싱
-      const feedback: AiFeedback = JSON.parse(response.response.trim());
+      const feedback = this.parseJsonResponse(response.response);
 
-      // 기본값 검증
       if (!feedback.good || !feedback.improvement || !feedback.recommendation) {
         throw new Error("Invalid feedback structure");
       }
 
       return feedback;
     } catch (e) {
-      console.error("AI feedback generation failed:", e);
+      console.error(
+        `AI feedback generation failed (attempt ${retryCount + 1}):`,
+        e,
+      );
+
+      // 재시도 로직
+      if (retryCount < MAX_RETRIES) {
+        console.log(
+          `Retrying feedback generation... (${retryCount + 1}/${MAX_RETRIES})`,
+        );
+        return this.generateFeedback(question, answer, retryCount + 1);
+      }
 
       // 폴백 응답
       return {
@@ -687,30 +737,46 @@ export class EvaluationService {
     }
   }
 
-  async feedbackRegeneration(result: any, questionId: number) {
-    await this.prismaService.history.update({
-      where: { question_id: questionId },
-      data: {
-        question: result.question,
-        answer: result.answer,
-        feedback: JSON.stringify(result.feedback),
-        created_at: new Date(Date.now() + 9 * 60 * 60 * 1000),
-        score: result.score,
-        status: question_status.ANSWERED,
-      },
-    });
+  /**
+   * Ollama 응답에서 JSON을 추출하고 파싱
+   */
+  private parseJsonResponse(rawResponse: string): AiFeedback {
+    const trimmed = rawResponse.trim();
 
-    const history = await this.prismaService.history.findFirst({
-      where: { question_id: questionId },
-    });
-
-    if (!history) {
-      throw new Error("History not found");
+    // 1. 순수 JSON인 경우 바로 파싱 시도
+    if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+      try {
+        return JSON.parse(trimmed);
+      } catch {
+        // 파싱 실패 시 다음 단계로
+      }
     }
 
-    return {
-      ...history,
-      feedback: history.feedback ? JSON.parse(history.feedback) : null,
-    };
+    // 2. 마크다운 코드블록에서 JSON 추출 (```json ... ``` 또는 ``` ... ```)
+    const codeBlockMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+    if (codeBlockMatch) {
+      try {
+        return JSON.parse(codeBlockMatch[1].trim());
+      } catch {
+        // 파싱 실패 시 다음 단계로
+      }
+    }
+
+    // 3. 텍스트 내에서 JSON 객체 추출 ({ ... } 패턴)
+    const jsonMatch = trimmed.match(
+      /\{[\s\S]*"good"[\s\S]*"improvement"[\s\S]*"recommendation"[\s\S]*\}/,
+    );
+    if (jsonMatch) {
+      try {
+        return JSON.parse(jsonMatch[0]);
+      } catch {
+        // 파싱 실패 시 다음 단계로
+      }
+    }
+
+    // 모든 시도 실패
+    throw new Error(
+      `Failed to parse JSON from response: ${trimmed.substring(0, 100)}...`,
+    );
   }
 }
