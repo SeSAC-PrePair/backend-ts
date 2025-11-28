@@ -183,6 +183,13 @@ export class EvaluationService {
 
     const result = await this.calculateFeedback(feedbackRequestDto);
 
+    await this.prismaService.user.update({
+      where: { user_id: existQuestion.user_id },
+      data: {
+        points: { increment: result.score },
+      },
+    });
+
     await this.prismaService.history.update({
       where: { question_id: questionId },
       data: {
@@ -191,9 +198,6 @@ export class EvaluationService {
         feedback: JSON.stringify(result.feedback),
         created_at: new Date(Date.now() + 9 * 60 * 60 * 1000),
         score: result.score,
-        total_score: {
-          increment: result.score,
-        },
         status: question_status.ANSWERED,
       },
     });
