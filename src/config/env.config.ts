@@ -5,6 +5,8 @@ export const envSchema = z.object({
   OLLAMA_HOST: z.string(),
   OLLAMA_MODEL: z.string(),
   OLLAMA_EMBEDDING_MODEL: z.string(),
+  FE_DOMAIN: z.string(),
+  PREPAIR_DOMAIN: z.string(),
 });
 
 export type Env = z.infer<typeof envSchema>;
