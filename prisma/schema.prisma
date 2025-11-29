@@ -8,27 +8,28 @@ datasource db {
 }
 
 model history {
-  question_id Int              @id @default(autoincrement())
-  user_id     Int
-  question    String
-  created_at  DateTime?        @default(now()) @db.Timestamptz(6)
-  answerd_at  DateTime?        @default(now()) @db.Timestamptz(6)
+  history_id  String         @id @db.VarChar(200)
+  question_id String         @db.VarChar(200)
+  user_id     String         @db.VarChar(200)
   answer      String?
+  question    String
   feedback    String?
   score       Int?
-  status      question_status? @default(UNANSWERED)
-  user        user             @relation(fields: [user_id], references: [user_id], onDelete: Cascade, onUpdate: NoAction)
+  status      questionstatus
+  answered_at DateTime?      @db.Timestamp(6)
+  created_at  DateTime?      @db.Timestamp(6)
+  user        user           @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction, map: "fkpy3lfhg8fo09iuxmixhr0kdbt")
 }
 
 model user {
-  user_id           Int               @id @default(autoincrement())
-  email             String            @unique @db.VarChar(255)
-  name              String            @db.VarChar(100)
-  password          String            @db.VarChar(255)
-  job               String            @db.VarChar(100)
-  schedule          schedule_type
-  notification_type notification_type @default(EMAIL)
-  points            Int?              @default(0)
+  user_id           String           @id @db.VarChar(200)
+  email             String           @unique(map: "ukhl4ga9r00rh51mdaf20hmnslt") @db.VarChar(255)
+  job               String           @db.VarChar(100)
+  name              String           @db.VarChar(100)
+  password          String           @db.VarChar(255)
+  notification_type notificationtype
+  points            Int
+  schedule          scheduletype
   history           history[]
 }
 
@@ -62,6 +63,22 @@ enum question_status {
 }
 
 enum schedule_type {
+  DAILY
+  WEEKLY
+}
+
+enum notificationtype {
+  BOTH
+  EMAIL
+  KAKAO
+}
+
+enum questionstatus {
+  ANSWERED
+  UNANSWERED
+}
+
+enum scheduletype {
   DAILY
   WEEKLY
 }
