@@ -8,28 +8,28 @@ datasource db {
 }
 
 model history {
-  history_id  String         @id @db.VarChar(200)
-  question_id String         @db.VarChar(200)
-  user_id     String         @db.VarChar(200)
-  answer      String?
-  question    String
-  feedback    String?
   score       Int?
-  status      questionstatus
-  answered_at DateTime?      @db.Timestamp(6)
-  created_at  DateTime?      @db.Timestamp(6)
-  user        user           @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction, map: "fkpy3lfhg8fo09iuxmixhr0kdbt")
+  answered_at DateTime? @db.Timestamp(6)
+  created_at  DateTime? @db.Timestamp(6)
+  answer      String?
+  feedback    String?
+  history_id  String    @id @db.VarChar(200)
+  question    String
+  question_id String    @db.VarChar(200)
+  status      String    @db.VarChar(255)
+  user_id     String    @db.VarChar(200)
+  user        user      @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction, map: "fkpy3lfhg8fo09iuxmixhr0kdbt")
 }
 
 model user {
-  user_id           String           @id @db.VarChar(200)
-  email             String           @unique(map: "ukhl4ga9r00rh51mdaf20hmnslt") @db.VarChar(255)
-  job               String           @db.VarChar(100)
-  name              String           @db.VarChar(100)
-  password          String           @db.VarChar(255)
-  notification_type notificationtype
   points            Int
-  schedule          scheduletype
+  email             String    @unique @db.VarChar(255)
+  job               String    @db.VarChar(100)
+  name              String    @db.VarChar(100)
+  notification_type String    @db.VarChar(255)
+  password          String    @db.VarChar(255)
+  schedule          String    @db.VarChar(255)
+  user_id           String    @id @db.VarChar(200)
   history           history[]
 }
 
@@ -50,6 +50,22 @@ model sensor_data {
   light       Float?
   co2         Float?
   sensor      sensor   @relation(fields: [sensor_id], references: [sensor_id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+model interview_questions {
+  id           BigInt  @id @default(autoincrement())
+  category     String? @db.VarChar(255)
+  difficulty   String? @db.VarChar(255)
+  experience   String? @db.VarChar(255)
+  ideal_answer String?
+  keywords     String?
+  question     String
+  role         String? @db.VarChar(255)
+  source_type  String? @db.VarChar(255)
+
+  @@index([category], map: "idx_category")
+  @@index([difficulty], map: "idx_difficulty")
+  @@index([role], map: "idx_role")
 }
 
 enum notification_type {
