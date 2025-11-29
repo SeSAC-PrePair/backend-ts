@@ -1,12 +1,4 @@
-import {
-  Body,
-  Controller,
-  Get,
-  Param,
-  ParseIntPipe,
-  Patch,
-  Post,
-} from "@nestjs/common";
+import { Body, Controller, Get, Param, Patch, Post } from "@nestjs/common";
 import { AiFeedbackRequestDto } from "@/evaluation/dto/ai-feedback-request.dto";
 import { FeedbackRequestDto } from "@/evaluation/dto/feedback-request.dto";
 import { EvaluationService } from "@/evaluation/evaluation.service";
@@ -40,5 +32,10 @@ export class EvaluationController {
   @Post("feedback")
   async aiFeedback(@Body() dto: AiFeedbackRequestDto) {
     return await this.evaluationService.aiFeedback(dto);
+  }
+
+  @Get("feedback/:userId")
+  async meFeedback(@Param("userId") userId: string) {
+    return await this.evaluationService.feedbackMe(userId);
   }
 }

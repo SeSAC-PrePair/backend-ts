@@ -2,6 +2,7 @@ import { BadRequestException, Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { question_status } from "@prisma/client";
 import { Ollama } from "ollama";
+import OpenAI from "openai";
 import { v4 as uuid } from "uuid";
 import { Env } from "@/config/env.config";
 import { AiFeedbackRequestDto } from "@/evaluation/dto/ai-feedback-request.dto";
@@ -21,17 +22,31 @@ export interface FeedbackResult {
   detectedIssues?: string[];
 }
 
+export interface CompetencyScores {
+  proactivity: number; // 적극성
+  logicalThinking: number; // 논리적사고
+  creativity: number; // 창의력
+  careerValues: number; // 직업관
+  cooperation: number; // 협동성
+  coreValues: number; // 가치관
+}
+
+export interface PersonalAnalysis {
+  scores: CompetencyScores;
+  strengths: string;
+  improvements: string;
+  recommendations: string;
+}
+
 @Injectable()
 export class EvaluationService {
   constructor(
     private readonly ollama: Ollama,
+    private readonly openai: OpenAI,
     private readonly configService: ConfigService<Env, true>,
     private readonly prismaService: PrismaService,
   ) {}
 
-  /**
-   * 점수와 피드백을 계산만 수행 (DB 저장 없음)
-   */
   async calculateFeedback(
     feedbackRequestDto: FeedbackRequestDto,
   ): Promise<FeedbackResult> {
@@ -47,7 +62,6 @@ export class EvaluationService {
       };
     }
 
-    // 무의미한 답변 감지
     if (this.isMeaninglessAnswer(answer)) {
       return {
         score: 0,
@@ -57,7 +71,6 @@ export class EvaluationService {
       };
     }
 
-    // 임베딩 생성
     const [questionEmbedding, answerEmbedding, referenceEmbedding] =
       await Promise.all([
         this.generateEmbedding(question),
@@ -65,14 +78,12 @@ export class EvaluationService {
         this.generateReferenceEmbedding(question),
       ]);
 
-    // 조기 주제 관련성 체크 - 무관한 답변은 0-5점 처리
     const topicSimilarity = this.cosineSimilarity(
       questionEmbedding,
       answerEmbedding,
     );
 
     if (topicSimilarity < 0.25) {
-      // 완전히 무관한 주제
       const score =
         topicSimilarity < 0.15 ? 0 : Math.round(topicSimilarity * 20);
       return {
@@ -83,7 +94,6 @@ export class EvaluationService {
       };
     }
 
-    // 임베딩 기반 의미적 유사도 계산
     const questionAnswerSimilarity = this.cosineSimilarity(
       questionEmbedding,
       answerEmbedding,
@@ -94,23 +104,19 @@ export class EvaluationService {
       answerEmbedding,
     );
 
-    // 질문에 대한 답변의 관련성 점수(0~25점)
     const relevanceScore: number = this.calculateRelevanceScore(
       question,
       answer,
       questionAnswerSimilarity,
     );
 
-    // 의미적 유사도 점수 (0-40점)
     const semanticScore: number = this.calculateSemanticScore(
       questionAnswerSimilarity,
       referenceAnswerSimilarity,
     );
 
-    // 품질 점수 (0-35점)
     const qualityScore = this.calculateQualityScore(answer, issues);
 
-    // 7. 감점 요소 체크 (임베딩 재사용)
     const penalty = this.calculatePenalty(
       answer,
       questionEmbedding,
@@ -118,34 +124,25 @@ export class EvaluationService {
       issues,
     );
 
-    // 8. 최종 점수 계산
     const rawScore = relevanceScore + semanticScore + qualityScore - penalty;
     let finalScore = Math.round(Math.max(0, Math.min(100, rawScore)));
 
-    // 9. 답변 길이에 따른 점수 상한 적용 (더 엄격한 기준)
     const answerLength = answer.trim().length;
     if (answerLength < 50) {
-      // 매우 짧은 답변: 최대 45점
       finalScore = Math.min(finalScore, 45);
       if (!issues.includes("답변이 다소 짧습니다")) {
         issues.push("답변이 매우 짧아 점수가 제한됩니다");
       }
     } else if (answerLength < 80) {
-      // 짧은 답변: 최대 50점
       finalScore = Math.min(finalScore, 50);
     } else if (answerLength < 120) {
-      // 다소 짧은 답변: 최대 60점
       finalScore = Math.min(finalScore, 60);
     } else if (answerLength < 150) {
-      // 보통 길이: 최대 70점
       finalScore = Math.min(finalScore, 70);
     } else if (answerLength < 200) {
-      // 충분한 길이: 최대 80점
       finalScore = Math.min(finalScore, 80);
     }
-    // 200자 이상은 제한 없음
 
-    // 10. 질문 복잡도에 따른 필수 키워드 체크 및 추가 감점
     const missingKeywordsPenalty = this.checkRequiredKeywords(
       question,
       answer,
@@ -153,7 +150,6 @@ export class EvaluationService {
     );
     finalScore = Math.max(0, finalScore - missingKeywordsPenalty);
 
-    // 11. LLM 이진 판단을 통한 답변 완성도 체크
     const isComplete = await this.checkAnswerCompleteness(question, answer);
     if (!isComplete) {
       finalScore = Math.max(0, finalScore - 20);
@@ -283,8 +279,8 @@ export class EvaluationService {
         prompt,
         stream: false,
         options: {
-          temperature: 0.5, // 0과 가까우면 가장 결정론적 -> 0.5는 어느 정도 유연선이 필요하기 떄문에 설정
-          num_predict: 100, // 생성할 최대 토큰 수 -> 이는 답변이 길 필요가 없기 때문에 짧은 출력으로 비용 및 시간 절약
+          temperature: 0.5,
+          num_predict: 100,
         },
       });
 
@@ -296,7 +292,6 @@ export class EvaluationService {
     }
   }
 
-  // 코사인 유사도 계산
   private cosineSimilarity(vecA: number[], vecB: number[]): number {
     if (vecA.length === 0 || vecB.length === 0 || vecA.length !== vecB.length) {
       return 0;
@@ -325,7 +320,6 @@ export class EvaluationService {
     answer: string,
     embeddingSimilarity: number,
   ) {
-    // 질문의 핵심 키워드 추출
     const questionWords: string[] =
       question
         .toLowerCase()
@@ -336,21 +330,14 @@ export class EvaluationService {
     const answerWords = answer.toLowerCase().match(/[\w가-힣]+/g) || [];
     const answerWordSet = new Set(answerWords);
 
-    // 키워드 매칭률
     const matchedKeywords: number = questionWords.filter((w) =>
       answerWordSet.has(w),
     ).length;
     const keywordMatchRatio: number =
       questionWords.length > 0 ? matchedKeywords / questionWords.length : 0;
 
-    // 키워드 매칭 점수 (0-15점)
     const keywordScore: number = keywordMatchRatio * 15;
 
-    // 임베딩 유사도 점수 (0-10점)
-    // 조정된 범위: 0.2~0.5 범위를 0~10점으로 선형 매핑
-    // - 0.2 미만: 0점 (거의 무관한 답변)
-    // - 0.35: 5점 (중간 수준의 관련성)
-    // - 0.5 이상: 10점 (매우 관련성 높음)
     const embeddingScore: number = Math.max(
       0,
       Math.min(10, (embeddingSimilarity - 0.2) * 33.33),
@@ -363,11 +350,6 @@ export class EvaluationService {
     _questionAnswerSimilarity: number,
     referenceAnswerSimilarity: number,
   ): number {
-    // 참조 답변과의 유사도를 0-40점으로 매핑 (완화된 기준)
-    // 0.3 이하: 매우 낮음 (0-10점)
-    // 0.3-0.45: 보통 (10-25점)
-    // 0.45-0.6: 좋음 (25-35점)
-    // 0.6 이상: 매우 좋음 (35-40점)
     if (referenceAnswerSimilarity < 0.3) {
       return Math.round(referenceAnswerSimilarity * 33.33);
     } else if (referenceAnswerSimilarity < 0.45) {
@@ -384,7 +366,6 @@ export class EvaluationService {
   private calculateQualityScore(answer: string, issues: string[]) {
     let score = 0;
 
-    // 1. 답변 길이 평가 (0-15점) - 완화된 기준
     const length = answer.trim().length;
     if (length < 20) {
       score += 5;
@@ -394,24 +375,21 @@ export class EvaluationService {
     } else if (length < 80) {
       score += 13;
     } else {
-      // 80자 이상이면 길이에 대한 만점 부여
       score += 15;
     }
 
-    // 2. 문장 구조 평가 (0-10점) - 완화된 기준
     const sentences = answer.split(/[.!?]/).filter((s) => s.trim().length > 0);
     if (sentences.length === 1) {
-      score += 5; // 5점으로 상향 (기존 3점)
+      score += 5;
       issues.push("단일 문장으로 구성됨");
     } else if (sentences.length < 3) {
-      score += 8; // 8점으로 상향 (기존 6점)
+      score += 8;
     } else if (sentences.length <= 5) {
       score += 10;
     } else {
-      score += 9; // 너무 길어도 9점 (기존 8점)
+      score += 9;
     }
 
-    // 3. 구체성 평가 (0-10점) - 기준 완화
     const hasExamples = /예를 들[어면]|예시|사례|경우/.test(answer);
     const hasNumbers = /\d+/.test(answer);
     const hasSpecificTerms = answer
@@ -419,19 +397,13 @@ export class EvaluationService {
       .some((word) => word.length > 4);
 
     let specificityScore = 0;
-    // 기본 점수: 답변이 있으면 5점 부여 (기존 3점)
     specificityScore += 5;
-    // 예시 사용: +2점
     if (hasExamples) specificityScore += 2;
-    // 숫자/데이터 사용: +2점
     if (hasNumbers) specificityScore += 2;
-    // 전문 용어/구체적 표현: +3점
     if (hasSpecificTerms) specificityScore += 3;
 
-    // 최대 10점으로 제한
     score += Math.min(10, specificityScore);
 
-    // 기본 점수(5) + 전문 용어(3) + 숫자(2) = 10점 가능
     if (specificityScore < 7) {
       issues.push("구체적인 예시나 설명이 부족합니다");
     }
@@ -447,11 +419,6 @@ export class EvaluationService {
   ) {
     let penalty = 0;
 
-    // 주제 불일치는 feedback 메서드에서 조기 체크로 처리 (0.15 미만)
-    // 여기서는 약간의 주제 이탈만 감점
-    // topicSimilarity 0.15-0.25 범위는 이미 낮은 relevanceScore로 반영됨
-
-    // 2. 반복적인 내용 (완화)
     const words = answer.toLowerCase().match(/[\w가-힣]+/g) || [];
     const wordFreq = new Map<string, number>();
     words.forEach((w) => {
@@ -462,25 +429,18 @@ export class EvaluationService {
 
     const maxFreq = Math.max(...Array.from(wordFreq.values()));
     if (maxFreq > 7) {
-      // 기존 5 -> 7로 완화
-      penalty += 5; // 기존 10점
+      penalty += 5;
       issues.push("동일한 단어가 과도하게 반복됩니다");
     }
 
-    // 3. 너무 짧거나 의미 없는 답변 (완화)
     if (words.length < 5) {
-      // 기존 10 -> 5로 완화
-      penalty += 15; // 기존 20점
+      penalty += 15;
       issues.push("답변의 내용이 부족합니다");
     }
 
     return penalty;
   }
 
-  /**
-   * LLM을 사용하여 답변이 질문의 핵심 요구사항을 충족하는지 이진 판단
-   * @returns true면 충족, false면 불충족
-   */
   private async checkAnswerCompleteness(
     question: string,
     answer: string,
@@ -515,25 +475,19 @@ export class EvaluationService {
         prompt,
         stream: false,
         options: {
-          temperature: 0.3, // 일관된 판단을 위해 낮은 temperature
-          num_predict: 10, // YES/NO만 받으면 되므로 최소한의 토큰
+          temperature: 0.3,
+          num_predict: 10,
         },
       });
 
       const result = response.response.trim().toUpperCase();
-
-      // YES 포함 여부로 판단
       return result.includes("YES");
     } catch (e) {
       console.error("Answer completeness check failed:", e);
-      // 에러 발생 시 보수적으로 true 반환 (과도한 감점 방지)
       return true;
     }
   }
 
-  /**
-   * 질문의 복잡도와 요구사항에 따라 필수 키워드 포함 여부를 체크하고 감점 적용
-   */
   private checkRequiredKeywords(
     question: string,
     answer: string,
@@ -543,7 +497,6 @@ export class EvaluationService {
     const questionLower = question.toLowerCase();
     const answerLower = answer.toLowerCase();
 
-    // 1. 복합 질문 패턴 감지 (여러 가지를 물어보는 질문)
     const complexQuestionPatterns = [
       /무엇.*어떤/,
       /무엇.*왜/,
@@ -557,19 +510,16 @@ export class EvaluationService {
       pattern.test(questionLower),
     );
 
-    // 2. 구체적 답변을 요구하는 패턴 감지
     const requiresSpecificAnswer =
       /무엇|what|어떤|which|나열|list|설명|explain|종류|types|방법|how/.test(
         questionLower,
       );
 
-    // 3. 질문에서 핵심 기술 용어/개념 추출
     const questionWords =
       question
         .match(/[\w가-힣]{3,}/g)
         ?.filter((w) => !KOREAN_STOP_WORDS.has(w.toLowerCase())) || [];
 
-    // 4. 답변에 질문의 핵심 단어가 얼마나 포함되어 있는지 체크
     const mentionedKeywords = questionWords.filter((keyword) =>
       answerLower.includes(keyword.toLowerCase()),
     );
@@ -579,24 +529,19 @@ export class EvaluationService {
         ? mentionedKeywords.length / questionWords.length
         : 1;
 
-    // 5. 복합 질문인데 답변이 불충분한 경우 감점
     if (isComplexQuestion) {
       if (answer.trim().length < 150) {
-        // 복합 질문인데 답변이 150자 미만
         penalty += 10;
         issues.push("복합 질문에 대한 답변이 불충분합니다");
       }
 
-      // 복합 질문인데 키워드 커버리지가 낮은 경우
       if (keywordCoverage < 0.3) {
         penalty += 15;
         issues.push("질문의 핵심 요구사항에 대한 답변이 부족합니다");
       }
     }
 
-    // 6. 구체적 답변을 요구하는데 일반론만 답한 경우
     if (requiresSpecificAnswer) {
-      // 숫자나 구체적 용어가 거의 없는 경우
       const hasNumbers = /\d+/.test(answer);
       const hasSpecificTerms = answer.split(/\s+/).some((w) => w.length > 5);
       const hasBulletPoints = /\n|•|·|-\s/.test(answer);
@@ -607,7 +552,6 @@ export class EvaluationService {
       }
     }
 
-    // 7. 키워드 커버리지가 매우 낮은 경우 (질문 내용을 거의 언급 안함)
     if (keywordCoverage < 0.2 && questionWords.length >= 3) {
       penalty += 5;
       issues.push("질문의 주요 개념이 답변에 충분히 포함되지 않았습니다");
@@ -619,7 +563,6 @@ export class EvaluationService {
   private isMeaninglessAnswer(answer: string): boolean {
     const text = answer.trim();
 
-    // 1. 같은 문자가 80% 이상 반복되는 경우 (예: "aaaaaaaaaa")
     const charFreq = new Map<string, number>();
     for (const char of text) {
       charFreq.set(char, (charFreq.get(char) || 0) + 1);
@@ -629,8 +572,6 @@ export class EvaluationService {
       return true;
     }
 
-    // 2. 같은 짧은 패턴이 계속 반복되는 경우 (예: "asdfasdfasdf")
-    // 2-4글자 패턴이 5번 이상 연속 반복
     for (let patternLen = 2; patternLen <= 4; patternLen++) {
       const pattern = text.slice(0, patternLen);
       let repeatCount = 0;
@@ -645,21 +586,17 @@ export class EvaluationService {
         }
       }
 
-      // 패턴이 5번 이상 반복되고, 전체 텍스트의 70% 이상을 차지하면 무의미
       if (repeatCount >= 5 && (repeatCount * patternLen) / text.length > 0.7) {
         return true;
       }
     }
 
-    // 3. 의미 있는 단어가 거의 없는 경우
-    // 한글, 영어 단어로 파싱했을 때 2글자 이상 단어가 2개 미만
     const words = text.match(/[가-힣]+|[a-zA-Z]+/g) || [];
     const meaningfulWords = words.filter((w) => w.length >= 2);
     if (meaningfulWords.length < 2 && text.length > 20) {
       return true;
     }
 
-    // 4. 키보드 연타 패턴 감지
     const commonKeyPatterns = [
       /([qwer]{4,})\1+/i,
       /([asdf]{4,})\1+/i,
@@ -735,7 +672,6 @@ export class EvaluationService {
         e,
       );
 
-      // 재시도 로직
       if (retryCount < MAX_RETRIES) {
         console.log(
           `Retrying feedback generation... (${retryCount + 1}/${MAX_RETRIES})`,
@@ -743,55 +679,39 @@ export class EvaluationService {
         return this.generateFeedback(question, answer, retryCount + 1);
       }
 
-      // 폴백 응답
-      return {
-        good: "질문에 대해 성실하게 답변해 주셨습니다. 기본적인 개념을 이해하고 있음을 보여주셨으며, 자신의 생각을 표현하려고 노력하신 점이 긍정적입니다. 답변의 구조를 갖추어 전달하려 하신 점도 좋습니다.",
-        improvement:
-          "답변의 깊이를 더하기 위해 구체적인 예시나 실무 경험을 추가하면 좋겠습니다. 기술적인 용어에 대한 정확한 정의와 함께 실제 적용 사례를 포함하면 더욱 설득력 있는 답변이 될 것입니다. 또한 질문의 핵심 의도를 파악하여 그에 맞는 답변 구조를 구성하는 연습이 필요합니다.",
-        recommendation:
-          "해당 주제에 대한 공식 문서 학습, 실무 적용 사례 분석, 기술 블로그 및 아티클 읽기, 관련 프로젝트 실습 경험 쌓기, 면접 시뮬레이션을 통한 답변 구조화 연습",
-      };
+      const errorMessage =
+        e instanceof Error ? e.message : "알 수 없는 오류가 발생했습니다.";
+      throw new BadRequestException(
+        `AI 피드백 생성에 실패했습니다: ${errorMessage}`,
+      );
     }
   }
 
-  /**
-   * Ollama 응답에서 JSON을 추출하고 파싱
-   */
   private parseJsonResponse(rawResponse: string): AiFeedback {
     const trimmed = rawResponse.trim();
 
-    // 1. 순수 JSON인 경우 바로 파싱 시도
     if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
       try {
         return JSON.parse(trimmed);
-      } catch {
-        // 파싱 실패 시 다음 단계로
-      }
+      } catch {}
     }
 
-    // 2. 마크다운 코드블록에서 JSON 추출 (```json ... ``` 또는 ``` ... ```)
     const codeBlockMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
     if (codeBlockMatch) {
       try {
         return JSON.parse(codeBlockMatch[1].trim());
-      } catch {
-        // 파싱 실패 시 다음 단계로
-      }
+      } catch {}
     }
 
-    // 3. 텍스트 내에서 JSON 객체 추출 ({ ... } 패턴)
     const jsonMatch = trimmed.match(
       /\{[\s\S]*"good"[\s\S]*"improvement"[\s\S]*"recommendation"[\s\S]*\}/,
     );
     if (jsonMatch) {
       try {
         return JSON.parse(jsonMatch[0]);
-      } catch {
-        // 파싱 실패 시 다음 단계로
-      }
+      } catch {}
     }
 
-    // 모든 시도 실패
     throw new Error(
       `Failed to parse JSON from response: ${trimmed.substring(0, 100)}...`,
     );
@@ -825,6 +745,257 @@ export class EvaluationService {
     return {
       question: dto.question,
       answer: response.response.trim(),
+    };
+  }
+
+  async feedbackMe(userId: string): Promise<PersonalAnalysis> {
+    const existUser = await this.prismaService.user.findFirst({
+      where: { user_id: userId },
+    });
+
+    if (!existUser) {
+      throw new BadRequestException("사용자가 없습니다.");
+    }
+
+    const histories = await this.prismaService.history.findMany({
+      where: {
+        user_id: userId,
+        status: "ANSWERED",
+      },
+      select: {
+        question: true,
+        answer: true,
+        score: true,
+      },
+      orderBy: {
+        answered_at: "desc",
+      },
+      take: 20,
+    });
+
+    if (histories.length === 0) {
+      throw new BadRequestException(
+        "분석할 면접 답변이 없습니다. 먼저 면접 질문에 답변해주세요.",
+      );
+    }
+
+    const minAnswersForReliableAnalysis = 3;
+    const isLowConfidence = histories.length < minAnswersForReliableAnalysis;
+
+    const avgScore =
+      histories.reduce((sum, h) => sum + (h.score ?? 0), 0) / histories.length;
+
+    const qaPairs = histories
+      .map(
+        (h, idx) =>
+          `[답변 ${idx + 1}] (점수: ${h.score ?? "미채점"})\nQ: ${h.question}\nA: ${h.answer}`,
+      )
+      .join("\n\n---\n\n");
+
+    return this.analyzePersonality(qaPairs, 0, {
+      totalAnswers: histories.length,
+      avgScore,
+      isLowConfidence,
+    });
+  }
+
+  private async analyzePersonality(
+    qaPairs: string,
+    retryCount = 0,
+    context?: {
+      totalAnswers: number;
+      avgScore: number;
+      isLowConfidence: boolean;
+    },
+  ): Promise<PersonalAnalysis> {
+    const MAX_RETRIES = 2;
+
+    try {
+      const systemPrompt = `당신은 삼성, 현대, SK 등 대기업 인사팀에서 25년간 수천 명의 지원자를 면접한 엄격한 면접 전문가입니다.
+지원자의 면접 답변을 분석하여 6가지 핵심 역량을 **매우 엄격하게** 평가합니다.
+
+## 핵심 평가 원칙
+
+1. **기본값은 0점입니다.** 평범한 답변은 5점이 아니라 3점입니다.
+2. **7점 이상은 상위 20% 수준의 답변에만 부여합니다.**
+3. **9-10점은 상위 5% 수준, 실제 면접에서 "이 지원자는 반드시 뽑아야 한다"는 확신이 드는 경우에만 부여합니다.**
+4. **구체적 사례, 수치, 실제 경험이 없으면 높은 점수를 줄 수 없습니다.**
+5. **답변이 짧거나 추상적이면 반드시 감점합니다.**
+
+## 평가 역량 (각 10점 만점) - 엄격한 기준
+
+1. **적극성(proactivity)**: 도전 의식, 주도성, 자기 개발 의지
+   - 9-10점: 스스로 문제를 발견하고 해결한 구체적 사례 + 정량적 성과 제시 + 지속적 자기개발 증거
+   - 7-8점: 주도적으로 해결한 경험이 있으나 성과가 구체적이지 않음
+   - 5-6점: 주어진 일에 적극적이나, 자발적 도전 사례 부족
+   - 3-4점: 수동적이며 시키는 일만 수행한 경험만 언급
+   - 1-2점: 소극적 태도, 회피 성향, 또는 관련 내용 없음
+
+2. **논리적사고(logicalThinking)**: 문제 분석력, 구조적 사고, 근거 기반 설명
+   - 9-10점: MECE 원칙에 따른 체계적 분석, 명확한 인과관계, 데이터/수치 기반 설명
+   - 7-8점: 논리적 구조는 있으나 근거가 다소 약함
+   - 5-6점: 논리적 흐름은 있으나 깊이 부족, 일반론적 설명
+   - 3-4점: 두서없는 설명, 논리적 비약, 주장만 있고 근거 없음
+   - 1-2점: 감정적/즉흥적 답변, 일관성 없음
+
+3. **창의력(creativity)**: 독창적 아이디어, 새로운 관점, 유연한 사고
+   - 9-10점: 기존에 없던 참신한 해결책 + 실제 적용 경험 + 다각도 분석
+   - 7-8점: 일부 독창적 요소가 있으나 실행까지 연결되지 않음
+   - 5-6점: 일반적인 해결책, 교과서적 접근
+   - 3-4점: 정형화된 답변, 틀에 박힌 사고, 남들과 비슷한 답변
+   - 1-2점: 창의적 시도 전무, 단순 암기식 답변
+
+4. **직업관(careerValues)**: 직업에 대한 태도, 전문성 추구, 성장 비전
+   - 9-10점: 명확한 5년/10년 커리어 로드맵 + 구체적 실행 계획 + 업계 트렌드 이해
+   - 7-8점: 커리어 목표는 있으나 실행 계획이 구체적이지 않음
+   - 5-6점: 직업에 대한 관심은 있으나 막연함
+   - 3-4점: 막연한 직업관, "열심히 하겠다" 수준의 답변
+   - 1-2점: 직업에 대한 진지함 부족, 준비 없이 지원한 느낌
+
+5. **협동성(cooperation)**: 팀워크, 소통 능력, 갈등 해결 능력
+   - 9-10점: 팀에서의 구체적 역할 + 갈등 해결 사례 + 정량적 팀 성과
+   - 7-8점: 협력 경험은 있으나 본인 기여도가 불명확
+   - 5-6점: 협력 의지는 있으나 구체적 경험 부족
+   - 3-4점: 개인 중심적 성향, 팀 경험 언급 없음
+   - 1-2점: 협동 경험 없음, 갈등 회피 또는 부정적 경험만 언급
+
+6. **가치관(coreValues)**: 윤리의식, 책임감, 일관된 신념
+   - 9-10점: 명확한 가치관 + 일관된 원칙 + 실제 딜레마 상황에서의 의사결정 사례
+   - 7-8점: 가치관은 있으나 구체적 실천 사례가 약함
+   - 5-6점: 일반적인 가치관 언급, 차별화되지 않음
+   - 3-4점: 모호한 가치관, 표면적 답변
+   - 1-2점: 가치관 미정립, 일관성 없는 답변
+
+## 추가 감점 요소 (반드시 적용)
+- 답변 길이가 100자 미만: 해당 역량 -2점
+- 구체적 사례/경험 없이 추상적 답변만: 해당 역량 -2점
+- 질문 의도를 파악하지 못한 답변: 해당 역량 -3점
+- STAR 기법 미적용 (상황-과제-행동-결과 구조 없음): -1점`;
+
+      const contextInfo = context
+        ? `\n\n## 참고 정보
+- 분석 대상 답변 수: ${context.totalAnswers}개
+- 평균 점수: ${context.avgScore.toFixed(1)}점
+- 신뢰도: ${context.isLowConfidence ? "낮음 (답변 수 부족으로 분석의 정확도가 제한됨)" : "보통"}`
+        : "";
+
+      const userPrompt = `## 분석할 면접 답변
+${contextInfo}
+
+${qaPairs}
+
+---
+
+## 분석 지침 (매우 엄격하게 적용)
+
+1. **각 답변을 개별 분석**하여 어떤 역량이 드러나는지 파악하세요.
+2. **구체적인 근거**를 들어 점수를 부여하세요. 근거 없이 높은 점수를 주지 마세요.
+3. 답변의 **길이, 구체성, 논리성, STAR 기법 적용 여부**를 종합적으로 고려하세요.
+4. **절대 후하게 평가하지 마세요.** 대기업 면접관의 시각으로 냉정하게 평가하세요.
+5. **평균 점수가 5점을 넘기 어렵습니다.** 대부분의 취준생은 3-5점 수준입니다.
+6. **7점 이상은 정말 뛰어난 답변에만 부여하세요.**
+7. 각 점수에 대해 **왜 그 점수를 주었는지** 강점/약점에서 반드시 설명하세요.
+
+## 출력 형식 (JSON)
+
+\`\`\`json
+{
+  "scores": {
+    "proactivity": <0-10>,
+    "logicalThinking": <0-10>,
+    "creativity": <0-10>,
+    "careerValues": <0-10>,
+    "cooperation": <0-10>,
+    "coreValues": <0-10>
+  },
+  "strengths": "지원자의 강점을 15~20문장(최소 500자 이상)으로 서술. [중요] '답변 1', '답변 3' 같은 번호 언급 절대 금지 - 사용자는 번호를 모름. 대신 '전반적으로', '대부분의 답변에서', '여러 답변을 통해' 같은 표현 사용. 전체 답변에서 나타나는 공통적인 강점 패턴과 경향을 분석. 각 강점이 실제 업무에서 어떻게 발휘될 수 있는지 설명.",
+  "improvements": "개선이 필요한 약점을 15~20문장(최소 500자 이상)으로 서술. [중요] '답변 2', '답변 5' 같은 번호 언급 절대 금지 - 사용자는 번호를 모름. 대신 '전반적으로', '여러 답변에서 공통적으로', '반복적으로 나타나는' 같은 표현 사용. 전체 답변에서 반복되는 문제점을 분석하고, 구체적인 개선 방법을 단계별로 제안.",
+  "recommendations": "면접 질문에서 드러난 부족한 지식/개념을 7~10개 쉼표로 구분하여 구체적으로 제시. 추상적인 '글쓰기 연습', '역량 강화' 같은 표현 금지. 반드시 '딱 이거 공부해!'라고 말할 수 있을 정도로 구체적인 주제만 작성. 예: 'REST API와 GraphQL의 차이점', '동기/비동기 처리 개념', '팀 프로젝트에서의 Git 브랜치 전략', 'SQL JOIN 종류와 사용법', '객체지향 SOLID 원칙'"
+}
+\`\`\`
+
+JSON만 출력하세요.`;
+
+      const response = await this.openai.chat.completions.create({
+        model: "anthropic/claude-sonnet-4",
+        messages: [
+          {
+            role: "system",
+            content: systemPrompt,
+          },
+          {
+            role: "user",
+            content: userPrompt,
+          },
+        ],
+        temperature: 0.3,
+        max_completion_tokens: 8000,
+        response_format: { type: "json_object" },
+      });
+
+      const content = response.choices[0]?.message?.content;
+      if (!content) {
+        throw new Error("Empty response from OpenRouter");
+      }
+
+      const result = this.parsePersonalAnalysisResponse(content);
+      return result;
+    } catch (e) {
+      console.error(`Personal analysis failed (attempt ${retryCount + 1}):`, e);
+
+      if (retryCount < MAX_RETRIES) {
+        return this.analyzePersonality(qaPairs, retryCount + 1, context);
+      }
+
+      const errorMessage =
+        e instanceof Error ? e.message : "알 수 없는 오류가 발생했습니다.";
+      throw new BadRequestException(
+        `면접 답변 분석에 실패했습니다: ${errorMessage}`,
+      );
+    }
+  }
+
+  private parsePersonalAnalysisResponse(rawResponse: string): PersonalAnalysis {
+    const trimmed = rawResponse.trim();
+
+    let parsed: PersonalAnalysis;
+
+    if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+      try {
+        parsed = JSON.parse(trimmed);
+      } catch {
+        throw new Error("Failed to parse JSON response");
+      }
+    } else {
+      const codeBlockMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+      if (codeBlockMatch) {
+        parsed = JSON.parse(codeBlockMatch[1].trim());
+      } else {
+        const jsonMatch = trimmed.match(/\{[\s\S]*"scores"[\s\S]*\}/);
+        if (jsonMatch) {
+          parsed = JSON.parse(jsonMatch[0]);
+        } else {
+          throw new Error("No valid JSON found in response");
+        }
+      }
+    }
+
+    const scores = parsed.scores;
+    const clampScore = (score: number) =>
+      Math.max(0, Math.min(10, Math.round(score)));
+
+    return {
+      scores: {
+        proactivity: clampScore(scores.proactivity),
+        logicalThinking: clampScore(scores.logicalThinking),
+        creativity: clampScore(scores.creativity),
+        careerValues: clampScore(scores.careerValues),
+        cooperation: clampScore(scores.cooperation),
+        coreValues: clampScore(scores.coreValues),
+      },
+      strengths: parsed.strengths || "",
+      improvements: parsed.improvements || "",
+      recommendations: parsed.recommendations || "",
     };
   }
 }
