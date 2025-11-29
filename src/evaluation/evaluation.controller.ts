@@ -6,32 +6,32 @@ import {
   Patch,
   Post,
 } from "@nestjs/common";
-import type { FeedbackRequestDto } from "@/evaluation/dto/feedback-request.dto";
+import { FeedbackRequestDto } from "@/evaluation/dto/feedback-request.dto";
 import { EvaluationService } from "@/evaluation/evaluation.service";
 
 @Controller("api/evaluation")
 export class EvaluationController {
   constructor(private readonly evaluationService: EvaluationService) {}
 
-  @Patch("feedback/:questionId")
+  @Patch("feedback/:historyId")
   async feedback(
     @Body() feedbackRequestDto: FeedbackRequestDto,
-    @Param("questionId", new ParseIntPipe()) questionId: number,
+    @Param("historyId") historyId: string,
   ) {
     return await this.evaluationService.updateFeedback(
       feedbackRequestDto,
-      questionId,
+      historyId,
     );
   }
 
-  @Post("feedback/:questionId")
+  @Post("feedback/:historyId")
   async feedbackRegeneration(
     @Body() feedbackRequestDto: FeedbackRequestDto,
-    @Param("questionId", new ParseIntPipe()) questionId: number,
+    @Param("historyId") historyId: string,
   ) {
     return await this.evaluationService.createFeedback(
       feedbackRequestDto,
-      questionId,
+      historyId,
     );
   }
 }

@@ -2,6 +2,7 @@ import { BadRequestException, Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { question_status } from "@prisma/client";
 import { Ollama } from "ollama";
+import { v4 as uuid } from "uuid";
 import { Env } from "@/config/env.config";
 import { FeedbackRequestDto } from "@/evaluation/dto/feedback-request.dto";
 import { KOREAN_STOP_WORDS } from "@/shared/constants/korean-stop-words";
@@ -169,12 +170,12 @@ export class EvaluationService {
 
   async updateFeedback(
     feedbackRequestDto: FeedbackRequestDto,
-    questionId: number,
+    historyId: string,
   ) {
     const { question, answer } = feedbackRequestDto;
 
     const existQuestion = await this.prismaService.history.findFirst({
-      where: { question_id: questionId },
+      where: { history_id: historyId },
     });
 
     if (!existQuestion) {
@@ -191,19 +192,19 @@ export class EvaluationService {
     });
 
     await this.prismaService.history.update({
-      where: { question_id: questionId },
+      where: { history_id: historyId },
       data: {
         question,
         answer,
         feedback: JSON.stringify(result.feedback),
-        created_at: new Date(Date.now() + 9 * 60 * 60 * 1000),
+        answered_at: new Date(Date.now() + 9 * 60 * 60 * 1000),
         score: result.score,
         status: question_status.ANSWERED,
       },
     });
 
     const history = await this.prismaService.history.findFirst({
-      where: { question_id: questionId },
+      where: { history_id: historyId },
     });
 
     if (!history) {
@@ -218,13 +219,16 @@ export class EvaluationService {
 
   async createFeedback(
     feedbackRequestDto: FeedbackRequestDto,
-    questionId: number,
+    historyId: string,
   ) {
     const { question, answer } = feedbackRequestDto;
 
     const existHistory = await this.prismaService.history.findFirst({
-      where: { question_id: questionId },
-      select: { user_id: true },
+      where: { history_id: historyId },
+      select: {
+        user_id: true,
+        question_id: true,
+      },
     });
 
     if (!existHistory) {
@@ -237,6 +241,8 @@ export class EvaluationService {
 
     const newHistory = await this.prismaService.history.create({
       data: {
+        history_id: uuid(),
+        question_id: existHistory.question_id,
         user_id: existHistory.user_id,
         question,
         answer,
