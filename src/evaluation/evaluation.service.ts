@@ -4,6 +4,7 @@ import { question_status } from "@prisma/client";
 import { Ollama } from "ollama";
 import { v4 as uuid } from "uuid";
 import { Env } from "@/config/env.config";
+import { AiFeedbackRequestDto } from "@/evaluation/dto/ai-feedback-request.dto";
 import { FeedbackRequestDto } from "@/evaluation/dto/feedback-request.dto";
 import { KOREAN_STOP_WORDS } from "@/shared/constants/korean-stop-words";
 import { PrismaService } from "@/shared/prisma/prisma.service";
@@ -794,5 +795,36 @@ export class EvaluationService {
     throw new Error(
       `Failed to parse JSON from response: ${trimmed.substring(0, 100)}...`,
     );
+  }
+
+  async aiFeedback(dto: AiFeedbackRequestDto) {
+    if (!dto) {
+      throw new BadRequestException("질문이 없습니다.");
+    }
+
+    const prompt = `당신은 면접 전문가 입니다. 다음 면접 질문에 대한 모범 답변을 작성해주세요.
+    
+    질문: ${dto.question}
+    
+    요구사항:
+    - 실제 면접에서 사용할 수 있는 구체적이고 전문적인 답변
+    - 핵심 개념을 명확히 설명
+    - 실무 경험이나 예시를 포함하면 좋음
+    `;
+
+    const response = await this.ollama.generate({
+      model: this.configService.get("OLLAMA_MODEL", { infer: true }),
+      prompt: prompt,
+      stream: false,
+      options: {
+        temperature: 0.7,
+        num_predict: 400,
+      },
+    });
+
+    return {
+      question: dto.question,
+      answer: response.response.trim(),
+    };
   }
 }
