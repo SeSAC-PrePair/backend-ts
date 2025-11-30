@@ -760,7 +760,7 @@ export class EvaluationService {
     const histories = await this.prismaService.history.findMany({
       where: {
         user_id: userId,
-        status: "ANSWERED",
+        status: question_status.ANSWERED,
       },
       select: {
         question: true,
