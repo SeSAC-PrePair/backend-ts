@@ -7,6 +7,7 @@ export const envSchema = z.object({
   OLLAMA_EMBEDDING_MODEL: z.string(),
   FE_DOMAIN: z.string(),
   PREPAIR_DOMAIN: z.string(),
+  OPENROUTER_API_KEY: z.string(),
 });
 
 export type Env = z.infer<typeof envSchema>;
