@@ -71,6 +71,17 @@ export class EvaluationService {
       };
     }
 
+    // 질문 복사 탐지
+    const copyDetection = this.detectQuestionCopy(question, answer);
+    if (copyDetection.isCopied) {
+      return {
+        score: 0,
+        feedback:
+          "질문을 그대로 복사하거나 약간만 변형한 답변은 인정되지 않습니다. 본인의 생각과 경험을 담은 답변을 작성해주세요.",
+        detectedIssues: [copyDetection.reason],
+      };
+    }
+
     const [questionEmbedding, answerEmbedding, referenceEmbedding] =
       await Promise.all([
         this.generateEmbedding(question),
@@ -560,6 +571,203 @@ export class EvaluationService {
     return penalty;
   }
 
+  private detectQuestionCopy(
+    question: string,
+    answer: string,
+  ): { isCopied: boolean; reason: string; copyRatio?: number } {
+    const normalizedQuestion = question
+      .toLowerCase()
+      .replace(/[^\w가-힣]/g, "")
+      .trim();
+    const normalizedAnswer = answer
+      .toLowerCase()
+      .replace(/[^\w가-힣]/g, "")
+      .trim();
+
+    // 1. 완전 일치 체크
+    if (normalizedQuestion === normalizedAnswer) {
+      return {
+        isCopied: true,
+        reason: "질문을 그대로 복사함",
+        copyRatio: 1,
+      };
+    }
+
+    // 2. 질문이 답변에 포함되어 있는지 체크 (답변이 질문보다 조금만 긴 경우)
+    if (
+      normalizedAnswer.includes(normalizedQuestion) &&
+      normalizedAnswer.length < normalizedQuestion.length * 1.3
+    ) {
+      return {
+        isCopied: true,
+        reason: "질문을 거의 그대로 포함한 답변",
+        copyRatio: normalizedQuestion.length / normalizedAnswer.length,
+      };
+    }
+
+    // 3. 부분 복사 탐지 - LCS(최장 공통 부분 문자열) 기반
+    const lcsLength = this.findLongestCommonSubstring(
+      normalizedQuestion,
+      normalizedAnswer,
+    );
+    const lcsRatio = lcsLength / normalizedQuestion.length;
+
+    // 질문의 40% 이상이 연속으로 답변에 포함되어 있으면 부분 복사로 판정
+    if (lcsRatio > 0.4 && lcsLength >= 15) {
+      return {
+        isCopied: true,
+        reason: "질문의 상당 부분을 그대로 복사함",
+        copyRatio: lcsRatio,
+      };
+    }
+
+    // 4. N-gram 기반 부분 복사 탐지
+    const ngramCopyRatio = this.calculateNgramOverlap(
+      normalizedQuestion,
+      normalizedAnswer,
+      4, // 4-gram
+    );
+
+    if (ngramCopyRatio > 0.5) {
+      return {
+        isCopied: true,
+        reason: "질문 문구를 여러 곳에서 복사함",
+        copyRatio: ngramCopyRatio,
+      };
+    }
+
+    // 5. 레벤슈타인 거리 기반 유사도 (편집 거리)
+    const editDistance = this.calculateLevenshteinDistance(
+      normalizedQuestion,
+      normalizedAnswer,
+    );
+    const maxLen = Math.max(normalizedQuestion.length, normalizedAnswer.length);
+    const similarity = 1 - editDistance / maxLen;
+
+    if (similarity > 0.85) {
+      return {
+        isCopied: true,
+        reason: "질문과 매우 유사한 답변 (약간의 변형만 있음)",
+        copyRatio: similarity,
+      };
+    }
+
+    // 6. 단어 집합 기반 유사도 (Jaccard) - 답변에서 질문 단어가 차지하는 비율
+    const questionWords = (
+      normalizedQuestion.match(/[가-힣]{2,}|[a-zA-Z]{2,}/g) || []
+    ).filter((w) => !KOREAN_STOP_WORDS.has(w));
+    const answerWords =
+      normalizedAnswer.match(/[가-힣]{2,}|[a-zA-Z]{2,}/g) || [];
+
+    if (questionWords.length > 0 && answerWords.length > 0) {
+      const questionWordSet = new Set(questionWords);
+      const matchedInAnswer = answerWords.filter((w) => questionWordSet.has(w));
+
+      // 답변 단어 중 질문에서 온 단어의 비율
+      const answerCopyRatio = matchedInAnswer.length / answerWords.length;
+
+      // 답변의 70% 이상이 질문에서 가져온 단어로 구성되어 있으면 복사로 판정
+      if (answerCopyRatio > 0.7 && answer.length < question.length * 1.8) {
+        return {
+          isCopied: true,
+          reason: "답변 대부분이 질문의 단어로만 구성됨",
+          copyRatio: answerCopyRatio,
+        };
+      }
+    }
+
+    return {
+      isCopied: false,
+      reason: "",
+    };
+  }
+
+  private findLongestCommonSubstring(str1: string, str2: string): number {
+    const m = str1.length;
+    const n = str2.length;
+
+    // 메모리 최적화: 두 행만 사용
+    let prev = new Array(n + 1).fill(0);
+    let curr = new Array(n + 1).fill(0);
+    let maxLength = 0;
+
+    for (let i = 1; i <= m; i++) {
+      for (let j = 1; j <= n; j++) {
+        if (str1[i - 1] === str2[j - 1]) {
+          curr[j] = prev[j - 1] + 1;
+          maxLength = Math.max(maxLength, curr[j]);
+        } else {
+          curr[j] = 0;
+        }
+      }
+      [prev, curr] = [curr, prev];
+      curr.fill(0);
+    }
+
+    return maxLength;
+  }
+
+  private calculateNgramOverlap(
+    str1: string,
+    str2: string,
+    n: number,
+  ): number {
+    const getNgrams = (str: string, n: number): Set<string> => {
+      const ngrams = new Set<string>();
+      for (let i = 0; i <= str.length - n; i++) {
+        ngrams.add(str.slice(i, i + n));
+      }
+      return ngrams;
+    };
+
+    const ngrams1 = getNgrams(str1, n);
+    const ngrams2 = getNgrams(str2, n);
+
+    if (ngrams1.size === 0) return 0;
+
+    let matchCount = 0;
+    for (const ngram of ngrams1) {
+      if (ngrams2.has(ngram)) {
+        matchCount++;
+      }
+    }
+
+    return matchCount / ngrams1.size;
+  }
+
+  private calculateLevenshteinDistance(str1: string, str2: string): number {
+    const m = str1.length;
+    const n = str2.length;
+
+    // 최적화: 길이 차이가 너무 크면 바로 큰 값 반환
+    if (Math.abs(m - n) > Math.max(m, n) * 0.5) {
+      return Math.max(m, n);
+    }
+
+    const dp: number[][] = Array(m + 1)
+      .fill(null)
+      .map(() => Array(n + 1).fill(0));
+
+    for (let i = 0; i <= m; i++) dp[i][0] = i;
+    for (let j = 0; j <= n; j++) dp[0][j] = j;
+
+    for (let i = 1; i <= m; i++) {
+      for (let j = 1; j <= n; j++) {
+        if (str1[i - 1] === str2[j - 1]) {
+          dp[i][j] = dp[i - 1][j - 1];
+        } else {
+          dp[i][j] = Math.min(
+            dp[i - 1][j] + 1, // 삭제
+            dp[i][j - 1] + 1, // 삽입
+            dp[i - 1][j - 1] + 1, // 대체
+          );
+        }
+      }
+    }
+
+    return dp[m][n];
+  }
+
   private isMeaninglessAnswer(answer: string): boolean {
     const text = answer.trim();
 
@@ -722,15 +930,16 @@ export class EvaluationService {
       throw new BadRequestException("질문이 없습니다.");
     }
 
-    const prompt = `당신은 면접 전문가 입니다. 다음 면접 질문에 대한 모범 답변을 작성해주세요.
-    
-    질문: ${dto.question}
-    
-    요구사항:
-    - 실제 면접에서 사용할 수 있는 구체적이고 전문적인 답변
-    - 핵심 개념을 명확히 설명
-    - 실무 경험이나 예시를 포함하면 좋음
-    `;
+    const prompt = `당신은 면접 전문가입니다. 다음 면접 질문에 대한 모범 답변을 작성하세요.
+
+질문: ${dto.question}
+
+요구사항:
+- 실제 면접에서 사용할 수 있는 구체적이고 전문적인 답변
+- 핵심 개념을 명확히 설명
+- 실무 경험이나 예시를 포함
+
+중요: "답변:", "모범 답변:", "Answer:" 등의 접두어 없이 답변 내용만 바로 작성하세요.`;
 
     const response = await this.ollama.generate({
       model: this.configService.get("OLLAMA_MODEL", { infer: true }),
@@ -742,9 +951,20 @@ export class EvaluationService {
       },
     });
 
+    let answer = response.response.trim();
+
+    // "답변:", "모범 답변:", "Answer:" 등의 접두어 제거
+    answer = answer.replace(/^(답변\s*[:：]?\s*|모범\s*답변\s*[:：]?\s*|Answer\s*[:：]?\s*)/i, "").trim();
+
+    // 일본어 한자, 중국어 간체/번체 등 불필요한 문자 제거 (한글, 영문, 숫자, 기본 문장부호만 허용)
+    answer = answer.replace(/[一-龯㐀-䶵]/g, "").trim();
+
+    // 연속된 공백 정리
+    answer = answer.replace(/\s{2,}/g, " ").trim();
+
     return {
       question: dto.question,
-      answer: response.response.trim(),
+      answer,
     };
   }
 
