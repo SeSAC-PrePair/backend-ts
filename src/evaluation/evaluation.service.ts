@@ -256,6 +256,7 @@ export class EvaluationService {
         answer,
         feedback: JSON.stringify(result.feedback),
         created_at: new Date(Date.now() + 9 * 60 * 60 * 1000),
+        answered_at: new Date(Date.now() + 9 * 60 * 60 * 1000),
         score: result.score,
         status: question_status.ANSWERED,
       },
