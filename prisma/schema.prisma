@@ -13,24 +13,25 @@ model history {
   created_at  DateTime? @db.Timestamp(6)
   answer      String?
   feedback    String?
-  history_id  String    @id @db.VarChar(200)
+  history_id  String    @id @db.VarChar(255)
   question    String
-  question_id String    @db.VarChar(200)
+  question_id String    @db.VarChar(255)
   status      String    @db.VarChar(255)
-  user_id     String    @db.VarChar(200)
+  user_id     String    @db.VarChar(255)
   user        user      @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction, map: "fkpy3lfhg8fo09iuxmixhr0kdbt")
 }
 
 model user {
   points            Int
-  email             String    @unique @db.VarChar(255)
-  job               String    @db.VarChar(100)
-  name              String    @db.VarChar(100)
-  notification_type String    @db.VarChar(255)
-  password          String    @db.VarChar(255)
-  schedule          String    @db.VarChar(255)
-  user_id           String    @id @db.VarChar(200)
+  email             String        @unique @db.VarChar(255)
+  job               String        @db.VarChar(255)
+  name              String        @db.VarChar(255)
+  notification_type String        @db.VarChar(255)
+  password          String        @db.VarChar(255)
+  schedule          String        @db.VarChar(255)
+  user_id           String        @id @db.VarChar(255)
   history           history[]
+  oauth_token       oauth_token[]
 }
 
 model sensor {
@@ -66,6 +67,20 @@ model interview_questions {
   @@index([category], map: "idx_category")
   @@index([difficulty], map: "idx_difficulty")
   @@index([role], map: "idx_role")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model oauth_token {
+  id                       BigInt    @id @default(autoincrement())
+  access_token             String    @db.VarChar(500)
+  created_at               DateTime  @db.Timestamp(6)
+  provider                 String    @db.VarChar(20)
+  refresh_token            String?   @db.VarChar(500)
+  refresh_token_expires_at DateTime? @db.Timestamp(6)
+  token_expires_at         DateTime  @db.Timestamp(6)
+  updated_at               DateTime? @db.Timestamp(6)
+  user_id                  String    @db.VarChar(255)
+  user                     user      @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction, map: "fk9bq3t9xrvellgudfdm1xrore7")
 }
 
 enum notification_type {
