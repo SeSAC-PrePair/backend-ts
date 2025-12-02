@@ -49,6 +49,7 @@ export class EvaluationService {
 
   async calculateFeedback(
     feedbackRequestDto: FeedbackRequestDto,
+    jobType?: string,
   ): Promise<FeedbackResult> {
     const { question, answer } = feedbackRequestDto;
 
@@ -167,7 +168,7 @@ export class EvaluationService {
       issues.push("질문의 핵심 요구사항을 충족하지 못했습니다");
     }
 
-    const feedback = await this.generateFeedback(question, answer);
+    const feedback = await this.generateFeedback(question, answer, jobType);
 
     return {
       score: finalScore,
@@ -184,13 +185,15 @@ export class EvaluationService {
 
     const existQuestion = await this.prismaService.history.findFirst({
       where: { history_id: historyId },
+      include: { user: { select: { job: true } } },
     });
 
     if (!existQuestion) {
       throw new BadRequestException("질문이 없습니다. 다시 확인해주세요.");
     }
 
-    const result = await this.calculateFeedback(feedbackRequestDto);
+    const jobType = existQuestion.user.job;
+    const result = await this.calculateFeedback(feedbackRequestDto, jobType);
 
     await this.prismaService.user.update({
       where: { user_id: existQuestion.user_id },
@@ -233,10 +236,7 @@ export class EvaluationService {
 
     const existHistory = await this.prismaService.history.findFirst({
       where: { history_id: historyId },
-      select: {
-        user_id: true,
-        question_id: true,
-      },
+      include: { user: { select: { job: true } } },
     });
 
     if (!existHistory) {
@@ -245,7 +245,8 @@ export class EvaluationService {
       );
     }
 
-    const result = await this.calculateFeedback(feedbackRequestDto);
+    const jobType = existHistory.user.job;
+    const result = await this.calculateFeedback(feedbackRequestDto, jobType);
 
     const newHistory = await this.prismaService.history.create({
       data: {
@@ -708,11 +709,7 @@ export class EvaluationService {
     return maxLength;
   }
 
-  private calculateNgramOverlap(
-    str1: string,
-    str2: string,
-    n: number,
-  ): number {
+  private calculateNgramOverlap(str1: string, str2: string, n: number): number {
     const getNgrams = (str: string, n: number): Set<string> => {
       const ngrams = new Set<string>();
       for (let i = 0; i <= str.length - n; i++) {
@@ -827,13 +824,18 @@ export class EvaluationService {
   private async generateFeedback(
     question: string,
     answer: string,
+    jobType?: string,
     retryCount = 0,
   ): Promise<AiFeedback> {
     const MAX_RETRIES = 2;
 
+    const jobContext = jobType
+      ? `\n[중요] 지원자의 직업군: ${jobType}\n추가 학습 주제는 반드시 "${jobType}" 직업과 관련된 내용으로 작성하세요.`
+      : "";
+
     try {
       const prompt = `당신은 경력 10년 이상의 시니어 면접관입니다. 다음 면접 질문과 지원자의 답변을 깊이 있게 분석하여 상세한 피드백을 제공하세요.
-
+${jobContext}
 면접 질문: ${question}
 
 지원자 답변: ${answer}
@@ -845,7 +847,7 @@ export class EvaluationService {
 {
   "good": "하나의 긴 문자열로 작성. 답변에서 잘한 점을 5~7문장으로 매우 상세하게 작성하세요. 면접 질문과의 연관성, 기술적 정확성, 구조적인 장점, 표현력, 전문성 등을 구체적인 예시와 함께 깊이 있게 평가하세요. 단순한 칭찬이 아니라 왜 그것이 좋은지 근거를 들어 설명하세요.",
   "improvement": "하나의 긴 문자열로 작성. 개선이 필요한 점을 5~7문장으로 매우 상세하게 작성하세요. 부족한 기술적 설명, 논리적 비약, 실무 관점의 미흡함, 깊이 부족 등을 구체적인 예시와 함께 지적하세요. 각 개선점마다 왜 개선이 필요한지, 어떻게 개선할 수 있는지를 함께 제시하세요.",
-  "recommendation": "추가 학습이 필요한 주제 5~7개를 쉼표로 구분하여 나열만 하세요. 서두 없이 주제명만 작성하세요. 예시: REST API 설계 원칙과 Best Practices, Docker 컨테이너 오케스트레이션 기초, 데이터베이스 인덱싱 전략, 시스템 아키텍처 설계 패턴"
+  "recommendation": "추가 학습이 필요한 주제 5~7개를 쉼표로 구분하여 나열만 하세요. 서두 없이 주제명만 작성하세요. 반드시 면접 질문과 지원자의 직업군에 관련된 주제를 추천하세요."
 }
 
 피드백 작성 기준:
@@ -885,7 +887,7 @@ export class EvaluationService {
         console.log(
           `Retrying feedback generation... (${retryCount + 1}/${MAX_RETRIES})`,
         );
-        return this.generateFeedback(question, answer, retryCount + 1);
+        return this.generateFeedback(question, answer, jobType, retryCount + 1);
       }
 
       const errorMessage =
@@ -955,7 +957,12 @@ export class EvaluationService {
     let answer = response.response.trim();
 
     // "답변:", "모범 답변:", "Answer:" 등의 접두어 제거
-    answer = answer.replace(/^(답변\s*[:：]?\s*|모범\s*답변\s*[:：]?\s*|Answer\s*[:：]?\s*)/i, "").trim();
+    answer = answer
+      .replace(
+        /^(답변\s*[:：]?\s*|모범\s*답변\s*[:：]?\s*|Answer\s*[:：]?\s*)/i,
+        "",
+      )
+      .trim();
 
     // 일본어 한자, 중국어 간체/번체 등 불필요한 문자 제거 (한글, 영문, 숫자, 기본 문장부호만 허용)
     answer = answer.replace(/[一-龯㐀-䶵]/g, "").trim();
